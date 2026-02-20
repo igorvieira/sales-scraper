@@ -110,19 +110,14 @@ export default function HomePage() {
         if (line.startsWith('data: ')) {
           const data = JSON.parse(line.slice(6))
 
-          if (data.type === 'processing') {
-            const globalIndex = startIndex + data.index
-            setResults(prev => prev.map((r, i) =>
-              i === globalIndex ? { ...r, status: 'processing' } : r
-            ))
-          } else if (data.type === 'result') {
+          if (data.type === 'result') {
             const globalIndex = startIndex + data.index
             setResults(prev => prev.map((r, i) =>
               i === globalIndex ? {
                 domain: data.domain,
                 status: data.status,
-                paymentPortals: data.paymentPortals,
-                psaPortals: data.psaPortals,
+                paymentPortals: data.paymentPortals || [],
+                psaPortals: data.psaPortals || [],
                 error: data.error,
               } : r
             ))

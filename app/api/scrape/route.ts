@@ -5,62 +5,36 @@ const requestSchema = z.object({
   domains: z.array(z.string()).min(1).max(30),
 })
 
+const CONCURRENT_LIMIT = 5 // Process 5 domains at a time
+
 // Payment detection patterns
 const PAYMENT_PATTERNS: Record<string, { patterns: RegExp[]; name: string }> = {
   stripe: {
-    patterns: [
-      /stripe\.com/i,
-      /js\.stripe\.com/i,
-      /checkout\.stripe\.com/i,
-      /stripe\.js/i,
-      /Stripe\(/i,
-    ],
+    patterns: [/stripe\.com/i, /js\.stripe\.com/i, /checkout\.stripe\.com/i, /Stripe\(/i],
     name: 'Stripe',
   },
   paypal: {
-    patterns: [
-      /paypal\.com/i,
-      /paypalobjects\.com/i,
-      /paypal\.me/i,
-      /paypal-button/i,
-    ],
+    patterns: [/paypal\.com/i, /paypalobjects\.com/i, /paypal\.me/i],
     name: 'PayPal',
   },
   square: {
-    patterns: [
-      /square\.com/i,
-      /squareup\.com/i,
-      /squarecdn\.com/i,
-    ],
+    patterns: [/square\.com/i, /squareup\.com/i, /squarecdn\.com/i],
     name: 'Square',
   },
   braintree: {
-    patterns: [
-      /braintree/i,
-      /braintreegateway\.com/i,
-      /braintree-api/i,
-    ],
+    patterns: [/braintree/i, /braintreegateway\.com/i],
     name: 'Braintree',
   },
   adyen: {
-    patterns: [
-      /adyen\.com/i,
-      /adyencheckout/i,
-    ],
+    patterns: [/adyen\.com/i, /adyencheckout/i],
     name: 'Adyen',
   },
   authorize: {
-    patterns: [
-      /authorize\.net/i,
-      /authorizenet/i,
-    ],
+    patterns: [/authorize\.net/i, /authorizenet/i],
     name: 'Authorize.net',
   },
   shopify: {
-    patterns: [
-      /cdn\.shopify\.com/i,
-      /checkout\.shopify\.com/i,
-    ],
+    patterns: [/cdn\.shopify\.com/i, /checkout\.shopify\.com/i],
     name: 'Shopify Payments',
   },
 }
@@ -68,97 +42,47 @@ const PAYMENT_PATTERNS: Record<string, { patterns: RegExp[]; name: string }> = {
 // PSA detection patterns
 const PSA_PATTERNS: Record<string, { patterns: RegExp[]; name: string }> = {
   connectwise: {
-    patterns: [
-      /connectwise\.com/i,
-      /connectwise/i,
-      /screenconnect\.com/i,
-      /screenconnect/i,
-      /manage\.connectwise/i,
-    ],
+    patterns: [/connectwise/i, /screenconnect/i],
     name: 'ConnectWise',
   },
   autotask: {
-    patterns: [
-      /autotask\.net/i,
-      /autotask\.com/i,
-      /autotask/i,
-      /datto\.com\/autotask/i,
-    ],
+    patterns: [/autotask/i],
     name: 'Autotask',
   },
   syncro: {
-    patterns: [
-      /syncromsp\.com/i,
-      /syncro\.com/i,
-      /syncro/i,
-    ],
+    patterns: [/syncromsp/i, /syncro/i],
     name: 'Syncro',
   },
   datto: {
-    patterns: [
-      /datto\.com/i,
-      /datto-rmm/i,
-      /dattobackup/i,
-      /datto/i,
-    ],
+    patterns: [/datto\.com/i, /datto/i],
     name: 'Datto',
   },
   kaseya: {
-    patterns: [
-      /kaseya\.com/i,
-      /kaseya/i,
-      /bms\.kaseya/i,
-    ],
+    patterns: [/kaseya/i],
     name: 'Kaseya',
   },
   ninjarmm: {
-    patterns: [
-      /ninjarmm\.com/i,
-      /ninjaone\.com/i,
-      /ninjarmm/i,
-      /ninjaone/i,
-    ],
+    patterns: [/ninjarmm/i, /ninjaone/i],
     name: 'NinjaRMM',
   },
   freshservice: {
-    patterns: [
-      /freshservice\.com/i,
-      /freshworks\.com/i,
-      /freshservice/i,
-      /freshdesk/i,
-    ],
+    patterns: [/freshservice/i, /freshworks/i, /freshdesk/i],
     name: 'Freshservice',
   },
   zendesk: {
-    patterns: [
-      /zendesk\.com/i,
-      /zdassets\.com/i,
-      /zendesk/i,
-    ],
+    patterns: [/zendesk/i, /zdassets\.com/i],
     name: 'Zendesk',
   },
   servicenow: {
-    patterns: [
-      /servicenow\.com/i,
-      /service-now\.com/i,
-      /servicenow/i,
-    ],
+    patterns: [/servicenow/i, /service-now/i],
     name: 'ServiceNow',
   },
   halopsa: {
-    patterns: [
-      /halopsa\.com/i,
-      /haloitsm\.com/i,
-      /halopsa/i,
-      /haloitsm/i,
-    ],
+    patterns: [/halopsa/i, /haloitsm/i],
     name: 'HaloPSA',
   },
   atera: {
-    patterns: [
-      /atera\.com/i,
-      /atera/i,
-    ],
+    patterns: [/atera/i],
     name: 'Atera',
   },
 }
@@ -166,8 +90,6 @@ const PSA_PATTERNS: Record<string, { patterns: RegExp[]; name: string }> = {
 function detectPortals(html: string, url: string) {
   const paymentPortals: string[] = []
   const psaPortals: string[] = []
-
-  // Combine HTML and URL for detection
   const content = `${html} ${url}`.toLowerCase()
 
   for (const [, config] of Object.entries(PAYMENT_PATTERNS)) {
@@ -195,19 +117,18 @@ function detectPortals(html: string, url: string) {
   return { paymentPortals, psaPortals }
 }
 
-async function scrapeDomain(domain: string) {
+async function scrapeDomain(domain: string, index: number) {
   const url = domain.startsWith('http') ? domain : `https://${domain}`
 
   try {
     const controller = new AbortController()
-    const timeout = setTimeout(() => controller.abort(), 15000) // 15s timeout
+    const timeout = setTimeout(() => controller.abort(), 8000) // 8s timeout
 
     const response = await fetch(url, {
       signal: controller.signal,
       headers: {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-        'Accept-Language': 'en-US,en;q=0.5',
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+        'Accept': 'text/html,application/xhtml+xml',
       },
       redirect: 'follow',
     })
@@ -217,8 +138,9 @@ async function scrapeDomain(domain: string) {
     if (!response.ok) {
       return {
         domain,
+        index,
         status: 'error' as const,
-        error: `HTTP ${response.status} - ${response.statusText}`,
+        error: `HTTP ${response.status}`,
         paymentPortals: [] as string[],
         psaPortals: [] as string[],
       }
@@ -229,6 +151,7 @@ async function scrapeDomain(domain: string) {
 
     return {
       domain,
+      index,
       status: 'done' as const,
       paymentPortals: detection.paymentPortals,
       psaPortals: detection.psaPortals,
@@ -238,26 +161,40 @@ async function scrapeDomain(domain: string) {
 
     if (error instanceof Error) {
       if (error.name === 'AbortError') {
-        errorMessage = 'Timeout - site took too long to respond'
+        errorMessage = 'Timeout'
       } else if (error.message.includes('ENOTFOUND') || error.message.includes('getaddrinfo')) {
-        errorMessage = 'Domain not found (DNS error)'
+        errorMessage = 'DNS error'
       } else if (error.message.includes('ECONNREFUSED')) {
         errorMessage = 'Connection refused'
       } else if (error.message.includes('CERT') || error.message.includes('SSL')) {
-        errorMessage = 'SSL/Certificate error'
+        errorMessage = 'SSL error'
       } else if (error.message.includes('ECONNRESET')) {
-        errorMessage = 'Connection reset by server'
+        errorMessage = 'Connection reset'
       } else {
-        errorMessage = error.message
+        errorMessage = error.message.slice(0, 50)
       }
     }
 
     return {
       domain,
+      index,
       status: 'error' as const,
       error: errorMessage,
       paymentPortals: [] as string[],
       psaPortals: [] as string[],
+    }
+  }
+}
+
+// Process domains in parallel chunks
+async function* processInParallel(domains: string[]) {
+  for (let i = 0; i < domains.length; i += CONCURRENT_LIMIT) {
+    const chunk = domains.slice(i, i + CONCURRENT_LIMIT)
+    const promises = chunk.map((domain, j) => scrapeDomain(domain, i + j))
+    const results = await Promise.all(promises)
+
+    for (const result of results) {
+      yield result
     }
   }
 }
@@ -271,17 +208,9 @@ export async function POST(request: NextRequest) {
 
     const stream = new ReadableStream({
       async start(controller) {
-        for (let i = 0; i < domains.length; i++) {
-          const domain = domains[i]
-
+        for await (const result of processInParallel(domains)) {
           controller.enqueue(encoder.encode(
-            `data: ${JSON.stringify({ type: 'processing', domain, index: i })}\n\n`
-          ))
-
-          const result = await scrapeDomain(domain)
-
-          controller.enqueue(encoder.encode(
-            `data: ${JSON.stringify({ type: 'result', ...result, index: i })}\n\n`
+            `data: ${JSON.stringify({ type: 'result', ...result })}\n\n`
           ))
         }
 
