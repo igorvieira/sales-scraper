@@ -336,13 +336,14 @@ export default function HomePage() {
                         <TableHead>Status</TableHead>
                         <TableHead>Payment Portals</TableHead>
                         <TableHead>PSA Portals</TableHead>
+                        <TableHead>Error</TableHead>
                       </TableRow>
                     </TableHeader>
                     <TableBody>
                       {results.map((result, i) => (
-                        <TableRow key={i}>
+                        <TableRow key={i} className={result.status === 'error' ? 'bg-red-50' : ''}>
                           <TableCell className="text-muted-foreground">{i + 1}</TableCell>
-                          <TableCell className="font-mono">{result.domain}</TableCell>
+                          <TableCell className="font-mono text-sm">{result.domain}</TableCell>
                           <TableCell>
                             <Badge variant={
                               result.status === 'done' ? 'outline' :
@@ -354,30 +355,41 @@ export default function HomePage() {
                             </Badge>
                           </TableCell>
                           <TableCell>
-                            {result.paymentPortals.length > 0 ? (
+                            {result.status === 'error' ? (
+                              <span className="text-muted-foreground">-</span>
+                            ) : result.paymentPortals.length > 0 ? (
                               <div className="flex gap-1 flex-wrap">
                                 {result.paymentPortals.map((p, j) => (
-                                  <Badge key={j} variant="outline" className="bg-green-50">
+                                  <Badge key={j} variant="outline" className="bg-green-50 text-green-700">
                                     {p}
                                   </Badge>
                                 ))}
                               </div>
                             ) : result.status === 'done' ? (
-                              <span className="text-muted-foreground">-</span>
+                              <span className="text-muted-foreground">None</span>
                             ) : null}
                           </TableCell>
                           <TableCell>
-                            {result.psaPortals.length > 0 ? (
+                            {result.status === 'error' ? (
+                              <span className="text-muted-foreground">-</span>
+                            ) : result.psaPortals.length > 0 ? (
                               <div className="flex gap-1 flex-wrap">
                                 {result.psaPortals.map((p, j) => (
-                                  <Badge key={j} variant="outline" className="bg-purple-50">
+                                  <Badge key={j} variant="outline" className="bg-purple-50 text-purple-700">
                                     {p}
                                   </Badge>
                                 ))}
                               </div>
                             ) : result.status === 'done' ? (
-                              <span className="text-muted-foreground">-</span>
+                              <span className="text-muted-foreground">None</span>
                             ) : null}
+                          </TableCell>
+                          <TableCell>
+                            {result.error ? (
+                              <span className="text-sm text-red-600">{result.error}</span>
+                            ) : (
+                              <span className="text-muted-foreground">-</span>
+                            )}
                           </TableCell>
                         </TableRow>
                       ))}
