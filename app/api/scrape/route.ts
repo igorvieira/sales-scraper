@@ -1,11 +1,17 @@
 import { NextRequest } from 'next/server'
 import { z } from 'zod'
+import FirecrawlApp from '@mendable/firecrawl-js'
 
 const requestSchema = z.object({
   domains: z.array(z.string()).min(1).max(30),
 })
 
-const CONCURRENT_LIMIT = 5 // Process 5 domains at a time
+const CONCURRENT_LIMIT = 5
+
+// Initialize Firecrawl
+const firecrawl = process.env.FIRECRAWL_API_KEY
+  ? new FirecrawlApp({ apiKey: process.env.FIRECRAWL_API_KEY })
+  : null
 
 // Payment detection patterns
 const PAYMENT_PATTERNS: Record<string, { patterns: RegExp[]; name: string }> = {
@@ -34,8 +40,12 @@ const PAYMENT_PATTERNS: Record<string, { patterns: RegExp[]; name: string }> = {
     name: 'Authorize.net',
   },
   shopify: {
-    patterns: [/cdn\.shopify\.com/i, /checkout\.shopify\.com/i],
+    patterns: [/cdn\.shopify\.com/i, /checkout\.shopify\.com/i, /shopify/i],
     name: 'Shopify Payments',
+  },
+  woocommerce: {
+    patterns: [/woocommerce/i, /wc-ajax/i],
+    name: 'WooCommerce',
   },
 }
 
@@ -87,14 +97,14 @@ const PSA_PATTERNS: Record<string, { patterns: RegExp[]; name: string }> = {
   },
 }
 
-function detectPortals(html: string, url: string) {
+function detectPortals(content: string) {
   const paymentPortals: string[] = []
   const psaPortals: string[] = []
-  const content = `${html} ${url}`.toLowerCase()
+  const lowerContent = content.toLowerCase()
 
   for (const [, config] of Object.entries(PAYMENT_PATTERNS)) {
     for (const pattern of config.patterns) {
-      if (pattern.test(content)) {
+      if (pattern.test(lowerContent)) {
         if (!paymentPortals.includes(config.name)) {
           paymentPortals.push(config.name)
         }
@@ -105,7 +115,7 @@ function detectPortals(html: string, url: string) {
 
   for (const [, config] of Object.entries(PSA_PATTERNS)) {
     for (const pattern of config.patterns) {
-      if (pattern.test(content)) {
+      if (pattern.test(lowerContent)) {
         if (!psaPortals.includes(config.name)) {
           psaPortals.push(config.name)
         }
@@ -117,12 +127,45 @@ function detectPortals(html: string, url: string) {
   return { paymentPortals, psaPortals }
 }
 
-async function scrapeDomain(domain: string, index: number) {
+// Scrape with Firecrawl (better quality)
+async function scrapeWithFirecrawl(domain: string, index: number) {
+  const url = domain.startsWith('http') ? domain : `https://${domain}`
+
+  try {
+    const result = await firecrawl!.scrape(url, {
+      formats: ['html'],
+      timeout: 15000,
+    })
+
+    const html = result.html || ''
+    const detection = detectPortals(html)
+
+    return {
+      domain,
+      index,
+      status: 'done' as const,
+      paymentPortals: detection.paymentPortals,
+      psaPortals: detection.psaPortals,
+    }
+  } catch (error) {
+    return {
+      domain,
+      index,
+      status: 'error' as const,
+      error: error instanceof Error ? error.message.slice(0, 50) : 'Firecrawl error',
+      paymentPortals: [] as string[],
+      psaPortals: [] as string[],
+    }
+  }
+}
+
+// Fallback: scrape with fetch
+async function scrapeWithFetch(domain: string, index: number) {
   const url = domain.startsWith('http') ? domain : `https://${domain}`
 
   try {
     const controller = new AbortController()
-    const timeout = setTimeout(() => controller.abort(), 8000) // 8s timeout
+    const timeout = setTimeout(() => controller.abort(), 8000)
 
     const response = await fetch(url, {
       signal: controller.signal,
@@ -147,7 +190,7 @@ async function scrapeDomain(domain: string, index: number) {
     }
 
     const html = await response.text()
-    const detection = detectPortals(html, response.url)
+    const detection = detectPortals(html)
 
     return {
       domain,
@@ -162,14 +205,12 @@ async function scrapeDomain(domain: string, index: number) {
     if (error instanceof Error) {
       if (error.name === 'AbortError') {
         errorMessage = 'Timeout'
-      } else if (error.message.includes('ENOTFOUND') || error.message.includes('getaddrinfo')) {
+      } else if (error.message.includes('ENOTFOUND')) {
         errorMessage = 'DNS error'
       } else if (error.message.includes('ECONNREFUSED')) {
         errorMessage = 'Connection refused'
       } else if (error.message.includes('CERT') || error.message.includes('SSL')) {
         errorMessage = 'SSL error'
-      } else if (error.message.includes('ECONNRESET')) {
-        errorMessage = 'Connection reset'
       } else {
         errorMessage = error.message.slice(0, 50)
       }
@@ -184,6 +225,14 @@ async function scrapeDomain(domain: string, index: number) {
       psaPortals: [] as string[],
     }
   }
+}
+
+// Choose scraper based on configuration
+async function scrapeDomain(domain: string, index: number) {
+  if (firecrawl) {
+    return scrapeWithFirecrawl(domain, index)
+  }
+  return scrapeWithFetch(domain, index)
 }
 
 // Process domains in parallel chunks
@@ -205,9 +254,15 @@ export async function POST(request: NextRequest) {
     const { domains } = requestSchema.parse(body)
 
     const encoder = new TextEncoder()
+    const usingFirecrawl = !!firecrawl
 
     const stream = new ReadableStream({
       async start(controller) {
+        // Send info about which scraper is being used
+        controller.enqueue(encoder.encode(
+          `data: ${JSON.stringify({ type: 'info', scraper: usingFirecrawl ? 'firecrawl' : 'fetch' })}\n\n`
+        ))
+
         for await (const result of processInParallel(domains)) {
           controller.enqueue(encoder.encode(
             `data: ${JSON.stringify({ type: 'result', ...result })}\n\n`
